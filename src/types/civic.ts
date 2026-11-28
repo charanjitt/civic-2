@@ -130,6 +130,10 @@ export const MUNICIPAL_ROLES: UserRole[] = [
 
 export const ADMIN_ROLES: UserRole[] = ['municipal_admin', 'super_admin'];
 
+// Roles that may be granted through the officer approval flow.
+// Admin roles are deliberately excluded (no privilege escalation).
+export const OFFICER_ROLES: UserRole[] = ['field_officer', 'department_officer'];
+
 export const CIVIC_CATEGORY_DEFAULTS: Array<{
   slug: string;
   name: string;
