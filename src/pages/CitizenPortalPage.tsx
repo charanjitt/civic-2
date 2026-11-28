@@ -1,14 +1,34 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Bell, CheckCircle2, ClipboardList, MapPin, PlusCircle, User } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Bell,
+  Camera,
+  CheckCircle2,
+  ClipboardList,
+  Image as ImageIcon,
+  MapPin,
+  PlusCircle,
+  User,
+  X,
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { civicService } from '../services/civicService';
+import { ComplaintPhotoModal } from '../components/ComplaintPhotoModal';
 import { MapView } from '../components/MapView';
-import type {
-  Complaint,
-  ComplaintCategory,
-  ComplaintPriority,
-  NotificationItem,
+import {
+  ALLOWED_COMPLAINT_PHOTO_TYPES,
+  MAX_COMPLAINT_PHOTOS,
+  validateComplaintPhotoFile,
+  type Complaint,
+  type ComplaintCategory,
+  type ComplaintPriority,
+  type NotificationItem,
 } from '../types/civic';
+
+interface SelectedPhotoItem {
+  id: string;
+  file: File;
+  previewUrl: string;
+}
 
 export function CitizenPortalPage() {
   const { user, profile, updateProfile } = useAuth();
@@ -26,12 +46,27 @@ export function CitizenPortalPage() {
   const [priority, setPriority] = useState<ComplaintPriority>('medium');
   const [address, setAddress] = useState('');
   const [coords, setCoords] = useState<{ lat: number; lng: number }>({ lat: 17.385, lng: 78.4867 });
+  const [photoItems, setPhotoItems] = useState<SelectedPhotoItem[]>([]);
+  const photoItemsRef = useRef<SelectedPhotoItem[]>([]);
   const [submitting, setSubmitting] = useState(false);
+
+  // Full-screen photo preview modal
+  const [inspectingComplaint, setInspectingComplaint] = useState<Complaint | null>(null);
 
   // Profile edit state
   const [fullName, setFullName] = useState(profile?.full_name ?? '');
   const [phone, setPhone] = useState(profile?.phone ?? '');
   const [savingProfile, setSavingProfile] = useState(false);
+
+  useEffect(() => {
+    photoItemsRef.current = photoItems;
+  }, [photoItems]);
+
+  useEffect(() => {
+    return () => {
+      photoItemsRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+    };
+  }, []);
 
   useEffect(() => {
     if (profile) {
@@ -69,13 +104,71 @@ export function CitizenPortalPage() {
     return unsub;
   }, [loadData]);
 
+  const handlePhotosSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (picked.length === 0) return;
+
+    setError(null);
+    const remainingSlots = MAX_COMPLAINT_PHOTOS - photoItems.length;
+    if (remainingSlots <= 0) {
+      setError(`You can attach up to ${MAX_COMPLAINT_PHOTOS} photos per complaint.`);
+      return;
+    }
+
+    const toProcess = picked.slice(0, remainingSlots);
+    const added: SelectedPhotoItem[] = [];
+
+    for (const file of toProcess) {
+      const validationError = validateComplaintPhotoFile(file);
+      if (validationError) {
+        setError(validationError);
+        continue;
+      }
+      added.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+      });
+    }
+
+    if (picked.length > remainingSlots) {
+      setError(`Only the first ${remainingSlots} photo(s) were added (max ${MAX_COMPLAINT_PHOTOS}).`);
+    }
+
+    if (added.length > 0) {
+      setPhotoItems((prev) => [...prev, ...added]);
+    }
+  };
+
+  const handleRemovePhoto = (id: string) => {
+    setPhotoItems((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((p) => p.id !== id);
+    });
+  };
+
   const handleSubmitComplaint = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !categoryId) return;
+
+    if (photoItems.length < 1) {
+      setError('Please upload at least 1 photo of the problem so municipal officers can inspect and solve it.');
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
     setSuccessMsg(null);
+
+    let uploadedPaths: string[] = [];
     try {
+      uploadedPaths = await civicService.uploadComplaintPhotos(
+        user.id,
+        photoItems.map((item) => item.file)
+      );
+
       const selectedCat = categories.find((c) => c.id === categoryId);
       const created = await civicService.createComplaint({
         citizen_id: user.id,
@@ -87,13 +180,20 @@ export function CitizenPortalPage() {
         latitude: coords.lat,
         longitude: coords.lng,
         priority,
+        photo_urls: uploadedPaths,
       });
-      setSuccessMsg(`Complaint submitted! Tracking code: ${created.tracking_code}`);
+
+      photoItems.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      setPhotoItems([]);
+      setSuccessMsg(`Complaint submitted with photo evidence! Tracking code: ${created.tracking_code}`);
       setTitle('');
       setDescription('');
       setAddress('');
       await loadData();
     } catch (err) {
+      if (uploadedPaths.length > 0) {
+        await civicService.removeComplaintPhotos(uploadedPaths);
+      }
       setError(err instanceof Error ? err.message : 'Unable to submit complaint.');
     } finally {
       setSubmitting(false);
@@ -239,6 +339,71 @@ export function CitizenPortalPage() {
             </div>
 
             <div>
+              <div className="flex items-center justify-between text-xs">
+                <label
+                  htmlFor="issue-photos"
+                  className="inline-flex items-center gap-1.5 font-medium text-slate-300"
+                >
+                  <Camera className="h-3.5 w-3.5 text-sky-400" />
+                  Photo of the Problem <span className="text-rose-400">*</span>
+                </label>
+                <span className="text-slate-400">
+                  {photoItems.length} / {MAX_COMPLAINT_PHOTOS} attached (max 5 MB each)
+                </span>
+              </div>
+
+              <div className="mt-1.5 rounded-xl border border-dashed border-slate-700 bg-slate-950/70 p-3.5">
+                {photoItems.length < MAX_COMPLAINT_PHOTOS && (
+                  <label
+                    htmlFor="issue-photos"
+                    className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-900/70 px-4 py-4 text-center transition hover:border-sky-500/60 hover:bg-slate-900"
+                  >
+                    <Camera className="h-5 w-5 text-sky-400" />
+                    <span className="mt-1.5 text-xs font-semibold text-white">
+                      Click to capture or choose problem photo
+                    </span>
+                    <span className="mt-0.5 text-[11px] text-slate-400">
+                      JPG, PNG, or WebP · Sent securely to municipal officers for inspection
+                    </span>
+                    <input
+                      id="issue-photos"
+                      type="file"
+                      multiple
+                      accept={ALLOWED_COMPLAINT_PHOTO_TYPES.join(',')}
+                      onChange={handlePhotosSelected}
+                      className="sr-only"
+                    />
+                  </label>
+                )}
+
+                {photoItems.length > 0 && (
+                  <div className={`grid grid-cols-3 gap-3 ${photoItems.length < MAX_COMPLAINT_PHOTOS ? 'mt-3' : ''}`}>
+                    {photoItems.map((item, idx) => (
+                      <div
+                        key={item.id}
+                        className="group relative overflow-hidden rounded-lg border border-slate-700 bg-slate-900"
+                      >
+                        <img
+                          src={item.previewUrl}
+                          alt={`Selected problem photo ${idx + 1}`}
+                          className="h-24 w-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRemovePhoto(item.id)}
+                          aria-label={`Remove photo ${idx + 1}`}
+                          className="absolute right-1.5 top-1.5 rounded-full bg-slate-950/85 p-1 text-slate-200 transition hover:bg-rose-500 hover:text-white"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div>
               <div className="mb-2 flex items-center justify-between text-xs">
                 <span className="inline-flex items-center gap-1 font-medium text-slate-300">
                   <MapPin className="h-3.5 w-3.5 text-emerald-400" />
@@ -262,7 +427,7 @@ export function CitizenPortalPage() {
               disabled={submitting}
               className="w-full rounded-xl bg-sky-500 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-400 disabled:opacity-50"
             >
-              {submitting ? 'Submitting Complaint...' : 'Submit Civic Complaint'}
+              {submitting ? 'Uploading Photo & Submitting...' : 'Submit Civic Complaint'}
             </button>
           </form>
         </section>
@@ -357,6 +522,7 @@ export function CitizenPortalPage() {
               <thead className="border-b border-slate-800 text-slate-400">
                 <tr>
                   <th className="py-2.5 pr-4">Tracking Code</th>
+                  <th className="py-2.5 pr-4">Photo</th>
                   <th className="py-2.5 pr-4">Title</th>
                   <th className="py-2.5 pr-4">Category</th>
                   <th className="py-2.5 pr-4">Priority</th>
@@ -365,25 +531,66 @@ export function CitizenPortalPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/70">
-                {complaints.map((c) => (
-                  <tr key={c.id} className="hover:bg-slate-900/40">
-                    <td className="py-3 pr-4 font-mono font-semibold text-sky-400">{c.tracking_code}</td>
-                    <td className="py-3 pr-4 font-medium text-white">{c.title}</td>
-                    <td className="py-3 pr-4 text-slate-300">{c.category?.name ?? '—'}</td>
-                    <td className="py-3 pr-4 uppercase text-amber-300">{c.priority}</td>
-                    <td className="py-3 pr-4">
-                      <span className="rounded-full bg-slate-800 px-2.5 py-0.5 capitalize text-emerald-300">
-                        {c.status.replace('_', ' ')}
-                      </span>
-                    </td>
-                    <td className="py-3 text-slate-400">{new Date(c.created_at).toLocaleDateString()}</td>
-                  </tr>
-                ))}
+                {complaints.map((c) => {
+                  const previewThumb = c.signed_photo_urls?.[0] ?? null;
+                  const photoCount = c.photo_urls?.length ?? 0;
+                  return (
+                    <tr key={c.id} className="hover:bg-slate-900/40">
+                      <td className="py-3 pr-4 font-mono font-semibold text-sky-400">{c.tracking_code}</td>
+                      <td className="py-3 pr-4">
+                        {previewThumb ? (
+                          <button
+                            type="button"
+                            onClick={() => setInspectingComplaint(c)}
+                            className="group inline-flex items-center gap-1.5"
+                            title="Click to view full photo"
+                          >
+                            <img
+                              src={previewThumb}
+                              alt={`Evidence for ${c.title}`}
+                              className="h-10 w-14 rounded-lg border border-slate-700 object-cover transition group-hover:border-sky-400"
+                            />
+                            {photoCount > 1 && (
+                              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300">
+                                +{photoCount - 1}
+                              </span>
+                            )}
+                          </button>
+                        ) : photoCount > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setInspectingComplaint(c)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-[11px] text-sky-400 hover:bg-slate-800"
+                          >
+                            <ImageIcon className="h-3.5 w-3.5" />
+                            {photoCount} photo{photoCount > 1 ? 's' : ''}
+                          </button>
+                        ) : (
+                          <span className="text-slate-500">—</span>
+                        )}
+                      </td>
+                      <td className="py-3 pr-4 font-medium text-white">{c.title}</td>
+                      <td className="py-3 pr-4 text-slate-300">{c.category?.name ?? '—'}</td>
+                      <td className="py-3 pr-4 uppercase text-amber-300">{c.priority}</td>
+                      <td className="py-3 pr-4">
+                        <span className="rounded-full bg-slate-800 px-2.5 py-0.5 capitalize text-emerald-300">
+                          {c.status.replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td className="py-3 text-slate-400">{new Date(c.created_at).toLocaleDateString()}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </section>
+
+      <ComplaintPhotoModal
+        complaint={inspectingComplaint}
+        onClose={() => setInspectingComplaint(null)}
+      />
     </div>
   );
 }
