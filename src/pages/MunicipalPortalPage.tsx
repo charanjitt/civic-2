@@ -13,12 +13,14 @@ import { civicService } from '../services/civicService';
 import { MapView } from '../components/MapView';
 import {
   ADMIN_ROLES,
+  OFFICER_ROLES,
   type ActivityLog,
   type Complaint,
   type ComplaintPriority,
   type ComplaintStatus,
   type Department,
   type OfficerProfile,
+  type Profile,
 } from '../types/civic';
 
 type TabKey = 'complaints' | 'departments' | 'officers' | 'map' | 'analytics' | 'logs';
@@ -40,6 +42,15 @@ export function MunicipalPortalPage() {
   const [deptName, setDeptName] = useState('');
   const [deptDesc, setDeptDesc] = useState('');
 
+  // Officer approval form (admin only)
+  const [candidates, setCandidates] = useState<Profile[]>([]);
+  const [candProfileId, setCandProfileId] = useState('');
+  const [candRole, setCandRole] = useState<'field_officer' | 'department_officer'>('field_officer');
+  const [candDeptId, setCandDeptId] = useState('');
+  const [candBadge, setCandBadge] = useState('');
+  const [candDesignation, setCandDesignation] = useState('');
+  const [approving, setApproving] = useState(false);
+
   const isAdmin = hasRole(ADMIN_ROLES);
 
   const loadAll = useCallback(async () => {
@@ -55,8 +66,12 @@ export function MunicipalPortalPage() {
       setOfficers(oList);
 
       if (isAdmin) {
-        const logList = await civicService.listActivityLogs();
+        const [logList, candList] = await Promise.all([
+          civicService.listActivityLogs(),
+          civicService.listOfficerCandidates(),
+        ]);
         setLogs(logList);
+        setCandidates(candList);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load municipal portal data.');
@@ -161,6 +176,50 @@ export function MunicipalPortalPage() {
       await loadAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create department.');
+    }
+  };
+
+  const handleApproveOfficer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin) return;
+    setError(null);
+    setFeedback(null);
+    setApproving(true);
+    try {
+      await civicService.approveOfficer({
+        profileId: candProfileId,
+        role: candRole,
+        departmentId: candDeptId,
+        badgeNumber: candBadge,
+        designation: candDesignation,
+      });
+      setFeedback('Officer approved and verified.');
+      setCandProfileId('');
+      setCandRole('field_officer');
+      setCandDeptId('');
+      setCandBadge('');
+      setCandDesignation('');
+      await loadAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to approve officer.');
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const handleSuspendOfficer = async (officer: OfficerProfile) => {
+    if (!isAdmin) return;
+    if (!window.confirm(`Revoke municipal access for ${officer.profile?.full_name ?? officer.badge_number}?`)) {
+      return;
+    }
+    setError(null);
+    setFeedback(null);
+    try {
+      await civicService.suspendOfficer(officer.id);
+      setFeedback('Officer access revoked.');
+      await loadAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to revoke officer access.');
     }
   };
 
@@ -429,21 +488,132 @@ export function MunicipalPortalPage() {
       )}
 
       {tab === 'officers' && (
-        <div className="rounded-2xl border border-slate-800 bg-civic-surface p-6">
-          <h2 className="text-base font-semibold text-white">Authorized Field & Department Officers</h2>
-          {officers.length === 0 ? (
-            <p className="mt-3 text-xs text-slate-400">No officer profiles registered yet.</p>
-          ) : (
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {officers.map((o) => (
-                <div key={o.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-xs">
-                  <div className="font-semibold text-white">{o.profile?.full_name ?? 'Officer'}</div>
-                  <div className="mt-0.5 font-mono text-sky-400">Badge: {o.badge_number}</div>
-                  <div className="mt-1 text-slate-400">{o.designation} · {o.department?.name}</div>
-                </div>
-              ))}
-            </div>
+        <div className="space-y-6">
+          {isAdmin && (
+            <form
+              onSubmit={(e) => void handleApproveOfficer(e)}
+              className="rounded-2xl border border-emerald-500/30 bg-civic-surface p-6"
+            >
+              <h2 className="text-base font-semibold text-white">Approve Municipal Officer</h2>
+              <p className="mt-1 text-xs text-slate-400">
+                The person must first register as a citizen with their email. Approval promotes their
+                account, verifies it, and creates their officer record — all enforced in the database.
+              </p>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <select
+                  value={candProfileId}
+                  onChange={(e) => setCandProfileId(e.target.value)}
+                  required
+                  className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                >
+                  <option value="">Select citizen account...</option>
+                  {candidates.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.full_name} ({c.email})
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={candRole}
+                  onChange={(e) =>
+                    setCandRole(e.target.value as 'field_officer' | 'department_officer')
+                  }
+                  className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                >
+                  {OFFICER_ROLES.map((r) => (
+                    <option key={r} value={r}>
+                      {r.replace('_', ' ')}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={candDeptId}
+                  onChange={(e) => setCandDeptId(e.target.value)}
+                  required
+                  className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                >
+                  <option value="">Select department...</option>
+                  {departments.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+
+                <input
+                  value={candBadge}
+                  onChange={(e) => setCandBadge(e.target.value)}
+                  required
+                  placeholder="Badge number (e.g. CC-B-0042)"
+                  className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                />
+
+                <input
+                  value={candDesignation}
+                  onChange={(e) => setCandDesignation(e.target.value)}
+                  required
+                  placeholder="Designation (e.g. Sanitation Inspector)"
+                  className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                />
+
+                <button
+                  type="submit"
+                  disabled={approving || candidates.length === 0}
+                  className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+                >
+                  {approving ? 'Approving...' : 'Approve Officer'}
+                </button>
+              </div>
+
+              {candidates.length === 0 && (
+                <p className="mt-3 text-xs text-amber-400">
+                  No citizen accounts available. Ask the future officer to register first.
+                </p>
+              )}
+            </form>
           )}
+
+          <div className="rounded-2xl border border-slate-800 bg-civic-surface p-6">
+            <h2 className="text-base font-semibold text-white">Authorized Field & Department Officers</h2>
+            {officers.length === 0 ? (
+              <p className="mt-3 text-xs text-slate-400">No officer profiles registered yet.</p>
+            ) : (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {officers.map((o) => (
+                  <div key={o.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-white">
+                        {o.profile?.full_name ?? 'Officer'}
+                      </span>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                          o.is_active
+                            ? 'bg-emerald-500/20 text-emerald-300'
+                            : 'bg-slate-700 text-slate-400'
+                        }`}
+                      >
+                        {o.is_active ? 'Active' : 'Suspended'}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 font-mono text-sky-400">Badge: {o.badge_number}</div>
+                    <div className="mt-1 text-slate-400">{o.designation} · {o.department?.name}</div>
+                    {isAdmin && o.is_active && (
+                      <button
+                        type="button"
+                        onClick={() => void handleSuspendOfficer(o)}
+                        className="mt-3 rounded-lg border border-rose-500/40 px-3 py-1.5 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-500/10"
+                      >
+                        Revoke Access
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

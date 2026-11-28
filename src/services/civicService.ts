@@ -9,6 +9,7 @@ import type {
   NearbyComplaint,
   NotificationItem,
   OfficerProfile,
+  Profile,
 } from '../types/civic';
 
 function requireSupabase() {
@@ -193,6 +194,47 @@ export const civicService = {
       .order('created_at', { ascending: false });
     if (error) throw error;
     return (data ?? []) as OfficerProfile[];
+  },
+
+  // Citizen accounts that are candidates for officer promotion.
+  // RLS limits what each caller can see; the approval itself is
+  // re-checked inside the approve_officer database function.
+  async listOfficerCandidates(): Promise<Profile[]> {
+    const client = requireSupabase();
+    const { data, error } = await client
+      .from('profiles')
+      .select('*')
+      .eq('role', 'citizen')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    return (data ?? []) as Profile[];
+  },
+
+  async approveOfficer(params: {
+    profileId: string;
+    role: 'field_officer' | 'department_officer';
+    departmentId: string;
+    badgeNumber: string;
+    designation: string;
+  }): Promise<void> {
+    const client = requireSupabase();
+    const { error } = await client.rpc('approve_officer', {
+      p_profile_id: params.profileId,
+      p_role: params.role,
+      p_department_id: params.departmentId,
+      p_badge_number: params.badgeNumber,
+      p_designation: params.designation,
+    });
+    if (error) throw error;
+  },
+
+  async suspendOfficer(officerId: string): Promise<void> {
+    const client = requireSupabase();
+    const { error } = await client.rpc('suspend_officer', {
+      p_officer_id: officerId,
+    });
+    if (error) throw error;
   },
 
   async assignOfficer(params: {

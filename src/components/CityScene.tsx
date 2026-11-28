@@ -361,25 +361,19 @@ export function CityScene({ complaints = [], preset = 'overview' }: CityScenePro
   );
 
   const markers = useMemo<CityMarker[]>(() => {
-    if (complaints.length > 0) {
-      return complaints.slice(0, 12).map((c, idx) => {
-        const angle = (idx / Math.max(complaints.length, 1)) * Math.PI * 2;
-        const radius = 6 + (idx % 3) * 5.5;
-        return {
-          id: c.id,
-          trackingCode: c.tracking_code,
-          title: c.title,
-          status: c.status,
-          priority: c.priority,
-          position: [Math.cos(angle) * radius, 0, Math.sin(angle) * radius],
-        };
-      });
-    }
-    return [
-      { id: 'demo-1', trackingCode: 'TWIN-NODE-01', title: 'Road Surface Sensor Zone', status: 'monitored', priority: 'high', position: [-12, 0, -1] },
-      { id: 'demo-2', trackingCode: 'TWIN-NODE-02', title: 'Smart Streetlight Grid', status: 'active', priority: 'medium', position: [12, 0, 1] },
-      { id: 'demo-3', trackingCode: 'TWIN-NODE-03', title: 'Stormwater Drainage Node', status: 'alert', priority: 'critical', position: [0, 0, 12] },
-    ];
+    // Real complaint markers only — no mock/demo data in production features.
+    return complaints.slice(0, 12).map((c, idx) => {
+      const angle = (idx / Math.max(complaints.length, 1)) * Math.PI * 2;
+      const radius = 6 + (idx % 3) * 5.5;
+      return {
+        id: c.id,
+        trackingCode: c.tracking_code,
+        title: c.title,
+        status: c.status,
+        priority: c.priority,
+        position: [Math.cos(angle) * radius, 0, Math.sin(angle) * radius],
+      };
+    });
   }, [complaints]);
 
   return (

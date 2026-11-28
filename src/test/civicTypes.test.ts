@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ADMIN_ROLES, CIVIC_CATEGORY_DEFAULTS, MUNICIPAL_ROLES } from '../types/civic';
+import {
+  ADMIN_ROLES,
+  CIVIC_CATEGORY_DEFAULTS,
+  MUNICIPAL_ROLES,
+  OFFICER_ROLES,
+} from '../types/civic';
 
 describe('CivicConnect domain constants', () => {
   it('defines all 7 required civic complaint categories', () => {
@@ -18,5 +23,12 @@ describe('CivicConnect domain constants', () => {
   it('separates municipal staff roles from citizen role', () => {
     expect(MUNICIPAL_ROLES).not.toContain('citizen');
     expect(ADMIN_ROLES).toEqual(['municipal_admin', 'super_admin']);
+  });
+
+  it('officer approval can never grant admin privileges', () => {
+    expect(OFFICER_ROLES).toEqual(['field_officer', 'department_officer']);
+    expect(OFFICER_ROLES).not.toContain('municipal_admin');
+    expect(OFFICER_ROLES).not.toContain('super_admin');
+    expect(OFFICER_ROLES).not.toContain('citizen');
   });
 });
