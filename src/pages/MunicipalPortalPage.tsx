@@ -4,12 +4,15 @@ import {
   BarChart3,
   Building,
   ClipboardCheck,
+  Eye,
+  Image as ImageIcon,
   MapPin,
   ShieldCheck,
   Users,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { civicService } from '../services/civicService';
+import { ComplaintPhotoModal } from '../components/ComplaintPhotoModal';
 import { MapView } from '../components/MapView';
 import {
   ADMIN_ROLES,
@@ -34,6 +37,7 @@ export function MunicipalPortalPage() {
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [deptFilter, setDeptFilter] = useState<string>('all');
+  const [inspectingComplaint, setInspectingComplaint] = useState<Complaint | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -327,6 +331,7 @@ export function MunicipalPortalPage() {
               <thead className="border-b border-slate-800 text-slate-400">
                 <tr>
                   <th className="py-2.5 pr-4">Code</th>
+                  <th className="py-2.5 pr-4">Problem Photo</th>
                   <th className="py-2.5 pr-4">Issue</th>
                   <th className="py-2.5 pr-4">Department</th>
                   <th className="py-2.5 pr-4">Priority</th>
@@ -335,97 +340,146 @@ export function MunicipalPortalPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/70">
-                {filteredComplaints.map((c) => (
-                  <tr key={c.id}>
-                    <td className="py-3 pr-4 font-mono text-sky-400">{c.tracking_code}</td>
-                    <td className="py-3 pr-4">
-                      <div className="font-medium text-white">{c.title}</div>
-                      <div className="text-[11px] text-slate-400">{c.address}</div>
-                    </td>
-                    <td className="py-3 pr-4">
-                      <select
-                        value={c.department_id ?? ''}
-                        onChange={(e) =>
-                          void handleWorkflowUpdate(c, c.status, c.priority, e.target.value || null)
-                        }
-                        className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                      >
-                        <option value="">Unassigned</option>
-                        {departments.map((d) => (
-                          <option key={d.id} value={d.id}>
-                            {d.name}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="py-3 pr-4">
-                      <select
-                        value={c.priority}
-                        onChange={(e) =>
-                          void handleWorkflowUpdate(
-                            c,
-                            c.status,
-                            e.target.value as ComplaintPriority,
-                            c.department_id
-                          )
-                        }
-                        className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-amber-300"
-                      >
-                        {(['low', 'medium', 'high', 'critical'] as ComplaintPriority[]).map((p) => (
-                          <option key={p} value={p}>
-                            {p}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="py-3 pr-4">
-                      <select
-                        value={c.status}
-                        onChange={(e) =>
-                          void handleWorkflowUpdate(
-                            c,
-                            e.target.value as ComplaintStatus,
-                            c.priority,
-                            c.department_id
-                          )
-                        }
-                        className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-emerald-300"
-                      >
-                        {(
-                          [
-                            'submitted',
-                            'acknowledged',
-                            'assigned',
-                            'in_progress',
-                            'resolved',
-                            'verified',
-                            'rejected',
-                          ] as ComplaintStatus[]
-                        ).map((s) => (
-                          <option key={s} value={s}>
-                            {s.replace('_', ' ')}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="py-3">
-                      <select
-                        defaultValue=""
-                        onChange={(e) => void handleAssignOfficer(c, e.target.value)}
-                        className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
-                      >
-                        <option value="" disabled>
-                          Select officer...
-                        </option>
-                        {officers.map((o) => (
-                          <option key={o.id} value={o.id}>
-                            {o.profile?.full_name ?? o.badge_number} ({o.department?.code ?? 'DEPT'})
-                          </option>
-                        ))}
-                      </select>
+                {filteredComplaints.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-6 text-center text-slate-400">
+                      No complaints match the selected filters.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredComplaints.map((c) => {
+                    const thumb = c.signed_photo_urls?.[0] ?? null;
+                    const photoCount = c.photo_urls?.length ?? 0;
+                    return (
+                      <tr key={c.id}>
+                        <td className="py-3 pr-4 font-mono text-sky-400">{c.tracking_code}</td>
+                        <td className="py-3 pr-4">
+                          {thumb ? (
+                            <button
+                              type="button"
+                              onClick={() => setInspectingComplaint(c)}
+                              className="group inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/70 p-1 pr-2.5 transition hover:border-emerald-500/60"
+                              title="Click to inspect problem photo and details"
+                            >
+                              <img
+                                src={thumb}
+                                alt={`Problem reported for ${c.title}`}
+                                className="h-11 w-14 rounded-md object-cover"
+                              />
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-300 group-hover:text-emerald-200">
+                                <Eye className="h-3.5 w-3.5" />
+                                {photoCount > 1 ? `View (${photoCount})` : 'Inspect'}
+                              </span>
+                            </button>
+                          ) : photoCount > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => setInspectingComplaint(c)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 text-[11px] font-semibold text-sky-400 hover:bg-slate-800"
+                            >
+                              <ImageIcon className="h-3.5 w-3.5" />
+                              Inspect ({photoCount})
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setInspectingComplaint(c)}
+                              className="text-[11px] text-slate-500 underline hover:text-slate-300"
+                            >
+                              Details
+                            </button>
+                          )}
+                        </td>
+                        <td className="py-3 pr-4">
+                          <div className="font-medium text-white">{c.title}</div>
+                          <div className="text-[11px] text-slate-400">{c.address}</div>
+                        </td>
+                        <td className="py-3 pr-4">
+                          <select
+                            value={c.department_id ?? ''}
+                            onChange={(e) =>
+                              void handleWorkflowUpdate(c, c.status, c.priority, e.target.value || null)
+                            }
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                          >
+                            <option value="">Unassigned</option>
+                            {departments.map((d) => (
+                              <option key={d.id} value={d.id}>
+                                {d.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="py-3 pr-4">
+                          <select
+                            value={c.priority}
+                            onChange={(e) =>
+                              void handleWorkflowUpdate(
+                                c,
+                                c.status,
+                                e.target.value as ComplaintPriority,
+                                c.department_id
+                              )
+                            }
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-amber-300"
+                          >
+                            {(['low', 'medium', 'high', 'critical'] as ComplaintPriority[]).map((p) => (
+                              <option key={p} value={p}>
+                                {p}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="py-3 pr-4">
+                          <select
+                            value={c.status}
+                            onChange={(e) =>
+                              void handleWorkflowUpdate(
+                                c,
+                                e.target.value as ComplaintStatus,
+                                c.priority,
+                                c.department_id
+                              )
+                            }
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-emerald-300"
+                          >
+                            {(
+                              [
+                                'submitted',
+                                'acknowledged',
+                                'assigned',
+                                'in_progress',
+                                'resolved',
+                                'verified',
+                                'rejected',
+                              ] as ComplaintStatus[]
+                            ).map((s) => (
+                              <option key={s} value={s}>
+                                {s.replace('_', ' ')}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="py-3">
+                          <select
+                            defaultValue=""
+                            onChange={(e) => void handleAssignOfficer(c, e.target.value)}
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+                          >
+                            <option value="" disabled>
+                              Select officer...
+                            </option>
+                            {officers.map((o) => (
+                              <option key={o.id} value={o.id}>
+                                {o.profile?.full_name ?? o.badge_number} ({o.department?.code ?? 'DEPT'})
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -661,6 +715,11 @@ export function MunicipalPortalPage() {
           </div>
         </div>
       )}
+
+      <ComplaintPhotoModal
+        complaint={inspectingComplaint}
+        onClose={() => setInspectingComplaint(null)}
+      />
     </div>
   );
 }

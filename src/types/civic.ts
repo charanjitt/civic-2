@@ -74,6 +74,7 @@ export interface Complaint {
   priority: ComplaintPriority;
   status: ComplaintStatus;
   photo_urls: string[];
+  signed_photo_urls?: string[];
   created_at: string;
   updated_at: string;
   category?: Pick<ComplaintCategory, 'name' | 'slug'>;
@@ -147,3 +148,43 @@ export const CIVIC_CATEGORY_DEFAULTS: Array<{
   { slug: 'public-infrastructure', name: 'Public infrastructure', deptCode: 'INFRA' },
   { slug: 'other-civic-issues', name: 'Other civic issues', deptCode: 'INFRA' },
 ];
+
+export const COMPLAINT_PHOTOS_BUCKET = 'complaint-photos';
+export const MAX_COMPLAINT_PHOTOS = 3;
+export const MAX_COMPLAINT_PHOTO_BYTES = 5 * 1024 * 1024; // 5 MB
+
+export const ALLOWED_COMPLAINT_PHOTO_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+] as const;
+
+export function photoExtensionForMimeType(mimeType: string): 'jpg' | 'png' | 'webp' | null {
+  switch (mimeType.toLowerCase()) {
+    case 'image/jpeg':
+    case 'image/jpg':
+      return 'jpg';
+    case 'image/png':
+      return 'png';
+    case 'image/webp':
+      return 'webp';
+    default:
+      return null;
+  }
+}
+
+export function validateComplaintPhotoFile(
+  file: Pick<File, 'name' | 'size' | 'type'>
+): string | null {
+  if (!file || file.size <= 0) {
+    return `Photo "${file?.name ?? 'selected file'}" is empty.`;
+  }
+  if (!photoExtensionForMimeType(file.type)) {
+    return `Photo "${file.name}" must be a JPG, PNG, or WebP image.`;
+  }
+  if (file.size > MAX_COMPLAINT_PHOTO_BYTES) {
+    return `Photo "${file.name}" exceeds the 5 MB limit.`;
+  }
+  return null;
+}
+

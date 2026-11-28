@@ -1,15 +1,19 @@
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
-import type {
-  ActivityLog,
-  Complaint,
-  ComplaintCategory,
-  ComplaintPriority,
-  ComplaintStatus,
-  Department,
-  NearbyComplaint,
-  NotificationItem,
-  OfficerProfile,
-  Profile,
+import {
+  COMPLAINT_PHOTOS_BUCKET,
+  MAX_COMPLAINT_PHOTOS,
+  photoExtensionForMimeType,
+  validateComplaintPhotoFile,
+  type ActivityLog,
+  type Complaint,
+  type ComplaintCategory,
+  type ComplaintPriority,
+  type ComplaintStatus,
+  type Department,
+  type NearbyComplaint,
+  type NotificationItem,
+  type OfficerProfile,
+  type Profile,
 } from '../types/civic';
 
 function requireSupabase() {
@@ -19,6 +23,70 @@ function requireSupabase() {
     );
   }
   return supabase;
+}
+
+function randomShortId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 10);
+  }
+  return Math.random().toString(36).slice(2, 12);
+}
+
+/**
+ * Resolves private Supabase Storage paths into temporary signed URLs (1 hour)
+ * when the viewer is authenticated (the citizen who reported the issue OR
+ * verified municipal officers/admins, enforced by storage.objects RLS).
+ */
+async function attachSignedPhotoUrls(complaints: Complaint[]): Promise<Complaint[]> {
+  if (complaints.length === 0 || !isSupabaseConfigured || !supabase) {
+    return complaints;
+  }
+
+  const rawPaths = new Set<string>();
+  for (const c of complaints) {
+    for (const p of c.photo_urls ?? []) {
+      if (p && !/^https?:\/\//i.test(p)) {
+        rawPaths.add(p);
+      }
+    }
+  }
+
+  if (rawPaths.size === 0) {
+    return complaints.map((c) => ({
+      ...c,
+      signed_photo_urls: (c.photo_urls ?? []).filter(Boolean),
+    }));
+  }
+
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (!sessionData.session) {
+    return complaints.map((c) => ({
+      ...c,
+      signed_photo_urls: (c.photo_urls ?? []).filter((p) => /^https?:\/\//i.test(p)),
+    }));
+  }
+
+  const signedByPath = new Map<string, string>();
+  try {
+    const { data } = await supabase.storage
+      .from(COMPLAINT_PHOTOS_BUCKET)
+      .createSignedUrls(Array.from(rawPaths), 60 * 60);
+
+    for (const item of data ?? []) {
+      if (item.path && item.signedUrl) {
+        signedByPath.set(item.path, item.signedUrl);
+      }
+    }
+  } catch {
+    // Non-fatal: if storage migration hasn't run yet, still return complaints cleanly.
+  }
+
+  return complaints.map((c) => ({
+    ...c,
+    signed_photo_urls: (c.photo_urls ?? [])
+      .map((p) => (/^https?:\/\//i.test(p) ? p : signedByPath.get(p) ?? ''))
+      .filter(Boolean),
+  }));
 }
 
 export interface CreateComplaintInput {
@@ -31,6 +99,7 @@ export interface CreateComplaintInput {
   latitude: number;
   longitude: number;
   priority?: ComplaintPriority;
+  photo_urls: string[];
 }
 
 export const civicService = {
@@ -84,7 +153,7 @@ export const civicService = {
 
     const { data, error } = await query;
     if (error) throw error;
-    return (data ?? []) as Complaint[];
+    return attachSignedPhotoUrls((data ?? []) as Complaint[]);
   },
 
   async getComplaintByTrackingCode(trackingCode: string): Promise<Complaint | null> {
@@ -95,11 +164,76 @@ export const civicService = {
       .eq('tracking_code', trackingCode.trim().toUpperCase())
       .maybeSingle();
     if (error) throw error;
-    return data as Complaint | null;
+    if (!data) return null;
+    const [resolved] = await attachSignedPhotoUrls([data as Complaint]);
+    return resolved;
+  },
+
+  async uploadComplaintPhotos(userId: string, files: File[]): Promise<string[]> {
+    const client = requireSupabase();
+    if (!userId) {
+      throw new Error('You must be signed in to upload problem photos.');
+    }
+    if (files.length < 1) {
+      throw new Error('Please attach at least 1 photo of the problem.');
+    }
+    if (files.length > MAX_COMPLAINT_PHOTOS) {
+      throw new Error(`You can attach up to ${MAX_COMPLAINT_PHOTOS} photos per complaint.`);
+    }
+
+    for (const file of files) {
+      const validationError = validateComplaintPhotoFile(file);
+      if (validationError) throw new Error(validationError);
+    }
+
+    const uploadedPaths: string[] = [];
+    try {
+      for (const file of files) {
+        const ext = photoExtensionForMimeType(file.type);
+        if (!ext) {
+          throw new Error(`Unsupported image format for "${file.name}".`);
+        }
+        const storagePath = `${userId}/${Date.now()}-${randomShortId()}.${ext}`;
+        const { error } = await client.storage
+          .from(COMPLAINT_PHOTOS_BUCKET)
+          .upload(storagePath, file, {
+            contentType: file.type,
+            upsert: false,
+          });
+
+        if (error) {
+          if (/bucket not found/i.test(error.message)) {
+            throw new Error(
+              'Photo storage bucket is not set up yet. Run Migration 005 in the Supabase SQL Editor first.'
+            );
+          }
+          throw error;
+        }
+        uploadedPaths.push(storagePath);
+      }
+      return uploadedPaths;
+    } catch (err) {
+      if (uploadedPaths.length > 0) {
+        await client.storage.from(COMPLAINT_PHOTOS_BUCKET).remove(uploadedPaths).catch(() => {});
+      }
+      throw err;
+    }
+  },
+
+  async removeComplaintPhotos(paths: string[]): Promise<void> {
+    if (paths.length === 0 || !isSupabaseConfigured || !supabase) return;
+    await supabase.storage.from(COMPLAINT_PHOTOS_BUCKET).remove(paths).catch(() => {});
   },
 
   async createComplaint(input: CreateComplaintInput): Promise<Complaint> {
     const client = requireSupabase();
+    if (!input.photo_urls || input.photo_urls.length < 1) {
+      throw new Error('At least 1 photo of the problem is required to submit a complaint.');
+    }
+    if (input.photo_urls.length > MAX_COMPLAINT_PHOTOS) {
+      throw new Error(`A complaint can include at most ${MAX_COMPLAINT_PHOTOS} photos.`);
+    }
+
     const { data, error } = await client
       .from('complaints')
       .insert({
@@ -112,6 +246,7 @@ export const civicService = {
         latitude: input.latitude,
         longitude: input.longitude,
         priority: input.priority ?? 'medium',
+        photo_urls: input.photo_urls,
         tracking_code: '',
       })
       .select('*, category:complaint_categories(name, slug), department:departments(name, code)')
@@ -123,10 +258,11 @@ export const civicService = {
       old_status: null,
       new_status: 'submitted',
       changed_by: input.citizen_id,
-      note: 'Complaint submitted by citizen',
+      note: 'Complaint submitted by citizen with photo evidence',
     });
 
-    return data as Complaint;
+    const [resolved] = await attachSignedPhotoUrls([data as Complaint]);
+    return resolved;
   },
 
   async updateComplaintWorkflow(params: {
