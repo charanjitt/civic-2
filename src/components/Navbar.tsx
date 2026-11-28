@@ -1,10 +1,17 @@
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Building2, LogOut, MapPin, ShieldCheck, UserCircle } from 'lucide-react';
+import { Building2, LogOut, MapPin, Menu, ShieldCheck, UserCircle, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export function Navbar() {
   const { user, profile, isMunicipalStaff, signOut } = useAuth();
   const { pathname } = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Close the mobile menu whenever the route changes.
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   const navLinkClass = (path: string) =>
     `rounded-lg px-3 py-2 text-sm font-medium transition ${
@@ -50,6 +57,15 @@ export function Navbar() {
         </nav>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setMobileOpen((open) => !open)}
+            aria-label={mobileOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-expanded={mobileOpen}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 text-slate-300 transition hover:bg-slate-800 hover:text-white md:hidden"
+          >
+            {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
           {user ? (
             <>
               <Link
@@ -90,6 +106,26 @@ export function Navbar() {
           )}
         </div>
       </div>
+
+      {/* Mobile navigation panel */}
+      {mobileOpen && (
+        <nav className="border-t border-slate-800/80 bg-civic-bg/95 px-4 py-3 backdrop-blur-md md:hidden">
+          <div className="flex flex-col gap-1.5">
+            <Link to="/" className={navLinkClass('/')}>
+              3D City
+            </Link>
+            <Link to="/citizen" className={navLinkClass('/citizen')}>
+              Citizen Portal
+            </Link>
+            <Link to="/map" className={navLinkClass('/map')}>
+              Issue Map
+            </Link>
+            <Link to="/municipal" className={navLinkClass('/municipal')}>
+              Municipal Portal
+            </Link>
+          </div>
+        </nav>
+      )}
     </header>
   );
 }

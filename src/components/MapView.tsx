@@ -17,9 +17,13 @@ interface MapViewProps {
 const mapboxToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string | undefined;
 const hasValidToken = Boolean(mapboxToken && !mapboxToken.includes('your-mapbox-public-token'));
 
+// Module-level constant: a new array on every render would change the
+// useEffect dependency identity and tear down/rebuild the map constantly.
+const DEFAULT_CENTER: [number, number] = [78.4867, 17.385];
+
 export function MapView({
   complaints,
-  center = [78.4867, 17.385],
+  center = DEFAULT_CENTER,
   zoom = 12,
   selectable = false,
   selectedCoords,
